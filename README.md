@@ -29,8 +29,20 @@ Picking a photo to animate uses `image_picker`, and Film Maker uses
 
 1. In StartupAid, open **Developers → Studio widget** and make a widget key.
    Copy the public key (`pk_live_…`) and the signing secret (`sks_…`).
-2. On your server, behind your own sign-in, sign each user's id:
-   `hex(HMAC-SHA256(signingSecret, userId))`. Never put the secret in the app.
+2. On your server, behind your own sign-in, sign each user's id with an
+   expiry: `v2.<expiry>.<hex(HMAC-SHA256(signingSecret, userId + "." + expiry))>`,
+   where expiry is a Unix time in seconds, up to a day ahead (an hour is
+   plenty). Never put the secret in the app. Use a `signer`, so the widget
+   asks your server again whenever it starts a new session:
+
+   ```js
+   const expires = Math.floor(Date.now() / 1000) + 3600;
+   const mac = crypto.createHmac("sha256", secret).update(`${userId}.${expires}`).digest("hex");
+   const signature = `v2.${expires}.${mac}`;
+   ```
+
+   Keys made before expiring signatures also take the old, never-expiring
+   `hex(HMAC-SHA256(signingSecret, userId))` until you switch that off.
 3. In the app:
 
 ```dart

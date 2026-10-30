@@ -6,9 +6,10 @@ import 'package:http/http.dart' as http;
 
 import 'models.dart';
 
-/// Signs a user id for the studio. Call your own server, which computes
-/// HMAC-SHA256 of [userId] with the widget key's signing secret, in hex. The
-/// secret must never be in the app.
+/// Signs a user id for the studio. Call your own server, which returns
+/// `v2.<expiry>.<hex HMAC-SHA256 of "userId.expiry">` under the widget key's
+/// signing secret (expiry in Unix seconds, up to a day ahead). It's asked
+/// again for every new session. The secret must never be in the app.
 typedef StudioSigner = Future<String> Function(String userId);
 
 /// Talks to StartupAid's studio for one of your app's users.

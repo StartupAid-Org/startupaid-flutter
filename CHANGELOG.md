@@ -1,3 +1,9 @@
+## 0.1.1
+
+- Docs: signatures now expire (`v2.<expiry>.<hex>`), and new widget keys
+  take only those. Nothing changes in the API: return the new form from your
+  `signer`.
+
 ## 0.1.0
 
 First release.
