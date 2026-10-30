@@ -1,0 +1,32 @@
+name: startupaid_studio
+description: >-
+  StartupAid's Create studio as a Flutter widget: your app's users make AI
+  pictures, video, voices, presenter videos and films, paid from your
+  StartupAid credits within daily limits you set.
+version: 0.1.0
+homepage: https://startupaid.org
+repository: https://github.com/StartupAid-Org/startupaid-flutter
+issue_tracker: https://github.com/StartupAid-Org/startupaid-flutter/issues
+topics:
+  - ai
+  - video
+  - image-generation
+  - widget
+  - creator
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+  flutter: '>=3.27.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  image_picker: ^1.1.0
+  video_player: ^2.9.0
+  webview_flutter: ^4.10.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
