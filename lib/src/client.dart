@@ -246,8 +246,8 @@ class StudioClient {
     return (out['credits'] as num?)?.toInt() ?? 0;
   }
 
-  /// One of the ready-made presenters says [script] on camera. Comes back
-  /// pending; presenter videos take a few minutes.
+  /// A presenter says [script] on camera: a ready-made one or the user's own.
+  /// Comes back pending; presenter videos take a few minutes.
   Future<StudioAsset> createTalking(
       {required String avatarId,
       required String script,
@@ -258,6 +258,29 @@ class StudioClient {
       if (aspectRatio != null) 'aspectRatio': aspectRatio,
     });
     return StudioAsset.fromJson(out['asset'] as Map<String, dynamic>);
+  }
+
+  /// Makes the user's own presenter from a picture they [upload]ed, speaking
+  /// in one of the stock voices. A real person's likeness: [consent] says the
+  /// user confirmed it's them, or that they have the person's permission.
+  Future<StudioAvatar> createPresenter(
+      {required String uploadId,
+      required String name,
+      required String voice,
+      required bool consent}) async {
+    final out = await _send('POST', '/talking/presenters', body: {
+      'uploadId': uploadId,
+      'name': name,
+      'voice': voice,
+      'consent': consent,
+    });
+    return StudioAvatar.fromJson(out['presenter'] as Map<String, dynamic>);
+  }
+
+  /// Removes one of the user's own presenters and its photo. Videos already
+  /// made with it stay.
+  Future<void> deletePresenter(String id) async {
+    await _send('DELETE', '/talking/presenters/${Uri.encodeComponent(id)}');
   }
 
   /// Uploads a picture (JPEG, PNG or WebP, up to 10 MB) to animate.

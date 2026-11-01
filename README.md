@@ -69,7 +69,7 @@ if (picked != null) useIt(picked.url);
 
 Whatever the widget key allows, in tabs: **Pictures**, **Video** (from a
 description or a picture), **Voice** (speech in the stock voices, or music),
-**Presenter** (a ready-made presenter says a script on camera) and **Film
+**Presenter** (a ready-made presenter, or the user's own from a photo, says a script on camera) and **Film
 Maker** (below). Pass
 `features:` to show fewer. Voices made of real people and an account's own
 avatars are never offered to an app's users.

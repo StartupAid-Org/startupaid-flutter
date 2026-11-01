@@ -96,9 +96,21 @@ class _HomeState extends State<Home> {
       context,
       client: films ?? client,
       // --dart-define=COINS=true: the app's own prices, as "coins".
-      priceLabel: const bool.fromEnvironment('COINS')
-          ? (credits) => '${credits * 2} coins'
+      // LONG_PRICES=true: long ones and a pale brand colour, to see they still
+      // fit and read.
+      theme: const bool.fromEnvironment('LONG_PRICES')
+          ? const StudioTheme(
+              light: StudioPalette(
+                accent: Color(0xFFFFB13B),
+                accentEnd: Color(0xFFFFE600),
+              ),
+            )
           : null,
+      priceLabel: const bool.fromEnvironment('LONG_PRICES')
+          ? (credits) => '${credits * 53} tokens (≈ ₦${credits * 133})'
+          : const bool.fromEnvironment('COINS')
+              ? (credits) => '${credits * 2} coins'
+              : null,
       prompt:
           'A striking portrait poster for a series called “Lagos After Dark”, a thriller. No text on the image.',
       imageSize: '3:4',

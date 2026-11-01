@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -217,6 +218,8 @@ class _StartupAidStudioState extends State<StartupAidStudio> {
   // Presenters.
   final TextEditingController script = TextEditingController();
   String? avatar;
+  List<StudioAvatar> minePresenters = const [];
+  bool addingPresenter = false;
   String avatarCategory = '';
   String talkAspect = '9:16';
   int? talkQuote;
@@ -288,6 +291,7 @@ class _StartupAidStudioState extends State<StartupAidStudio> {
           musicMode = !a.speech && a.music;
         }
         final t = c.talking;
+        minePresenters = t?.mine ?? const [];
         if (t != null && t.avatars.isNotEmpty) avatar = t.avatars.first.id;
       });
       pickVideoModel();
@@ -584,6 +588,109 @@ class _StartupAidStudioState extends State<StartupAidStudio> {
   }
 
   // ---- presenters ----
+
+  // Their own presenter. The photo leaves the phone only once they've said
+  // they may use it.
+  Future<void> addPresenter(StudioConfig c, StudioLook look) async {
+    final x = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 2048,
+        maxHeight: 2048,
+        imageQuality: 90);
+    if (x == null || !mounted) return;
+    final bytes = await x.readAsBytes();
+    if (!mounted) return;
+    final saved = await showModalBottomSheet<({String name, String voice})>(
+      context: context,
+      backgroundColor: look.card,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => _Look(
+        look: look,
+        child: Theme(
+          data: look.material(),
+          child: _NewPresenter(photo: bytes, voices: c.talking!.voices),
+        ),
+      ),
+    );
+    if (saved == null || !mounted) return;
+    setState(() {
+      addingPresenter = true;
+      talkError = null;
+    });
+    try {
+      final up = await widget.client.upload(bytes, filename: x.name);
+      final made = await widget.client.createPresenter(
+          uploadId: up.id,
+          name: saved.name,
+          voice: saved.voice,
+          consent: true);
+      if (!mounted) return;
+      setState(() {
+        minePresenters = [made, ...minePresenters];
+        avatar = made.id;
+        avatarCategory = '';
+      });
+      requoteTalk();
+    } on StudioException catch (e) {
+      if (mounted) setState(() => talkError = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => talkError = "That presenter wasn't saved. Try again.");
+      }
+    } finally {
+      if (mounted) setState(() => addingPresenter = false);
+    }
+  }
+
+  Future<void> removePresenter(StudioAvatar who, StudioLook look) async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: look.card,
+        title: Text('Remove ${who.name}?',
+            style: look.style(18, weight: FontWeight.w700)),
+        content: Text(
+            'Their photo is deleted too. Videos already made stay in your list.',
+            style: look.style(15, color: look.muted, height: 1.4)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text('Keep',
+                  style: look.style(15, weight: FontWeight.w600))),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text('Remove',
+                  style: look.style(15,
+                      weight: FontWeight.w700, color: look.danger))),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    try {
+      await widget.client.deletePresenter(who.id);
+      if (!mounted) return;
+      final stock = config?.talking?.avatars ?? const <StudioAvatar>[];
+      setState(() {
+        minePresenters = [
+          for (final m in minePresenters)
+            if (m.id != who.id) m
+        ];
+        if (avatar == who.id) {
+          avatar = minePresenters.isNotEmpty
+              ? minePresenters.first.id
+              : (stock.isNotEmpty ? stock.first.id : null);
+        }
+      });
+      requoteTalk();
+    } on StudioException catch (e) {
+      if (mounted) setState(() => talkError = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => talkError = "That didn't go through. Try again.");
+      }
+    }
+  }
 
   void requoteTalk() {
     talkQuoteTimer?.cancel();
@@ -1126,12 +1233,18 @@ class _StartupAidStudioState extends State<StartupAidStudio> {
             ),
           ),
         _AvatarRow(
-          avatars: shown,
+          avatars: [...minePresenters, ...shown],
           selected: avatar,
           onSelected: (id) {
             setState(() => avatar = id);
             requoteTalk();
           },
+          // Only a server that offers voices can make one of their own.
+          adding: addingPresenter,
+          onAdd: t.voices.isEmpty ? null : () => addPresenter(c, look),
+          mine: {for (final m in minePresenters) m.id},
+          onRemove: (id) => removePresenter(
+              minePresenters.firstWhere((m) => m.id == id), look),
         ),
         const _Label('What they say'),
         _PromptField(
@@ -1171,6 +1284,23 @@ class _StartupAidStudioState extends State<StartupAidStudio> {
 
 // ---- pieces ----
 
+/// How much room text takes in the font it will really be drawn in (the app's
+/// own, unless the Look names one) at the phone's text size.
+Size _measure(BuildContext context, String text, TextStyle style,
+    {double maxWidth = double.infinity, int maxLines = 1}) {
+  final painter = TextPainter(
+    text: TextSpan(
+        text: text, style: DefaultTextStyle.of(context).style.merge(style)),
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: maxLines,
+    ellipsis: '…',
+  )..layout(maxWidth: maxWidth);
+  final size = painter.size;
+  painter.dispose();
+  return size;
+}
+
 class _Header extends StatelessWidget {
   const _Header(
       {required this.title, required this.remaining, required this.onClose});
@@ -1189,33 +1319,52 @@ class _Header extends StatelessWidget {
           _RoundIcon(
               icon: Icons.close_rounded, onTap: onClose, tooltip: 'Close'),
           const SizedBox(width: 10),
+          // The balance sits beside the title, or under it when an app's own
+          // price words are too long for one line; the title is never cut.
           Expanded(
-              child: Text(title,
-                  style: look.style(22, weight: FontWeight.w700, spacing: -0.4),
-                  overflow: TextOverflow.ellipsis)),
-          if (remaining != null && _Look.pricesOf(context).show)
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 250),
-              child: Container(
-                key: ValueKey(remaining),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                    color:
-                        look.accent.withValues(alpha: look.dark ? 0.18 : 0.10),
-                    borderRadius: BorderRadius.circular(999)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (!_Look.pricesOf(context).custom) ...[
-                    Icon(Icons.bolt_rounded, size: 16, color: look.accent),
-                    const SizedBox(width: 3),
-                  ],
-                  Text('${_Look.pricesOf(context).of(remaining!)} left today',
-                      style: look.style(13,
-                          weight: FontWeight.w600,
-                          color: look.dark ? look.text : look.accentEnd)),
-                ]),
-              ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 4,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(title,
+                    style:
+                        look.style(22, weight: FontWeight.w700, spacing: -0.4),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                if (remaining != null && _Look.pricesOf(context).show)
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 250),
+                    child: Container(
+                      key: ValueKey(remaining),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                          color: look.accent
+                              .withValues(alpha: look.dark ? 0.18 : 0.10),
+                          borderRadius: BorderRadius.circular(999)),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        if (!_Look.pricesOf(context).custom) ...[
+                          Icon(Icons.bolt_rounded,
+                              size: 16, color: look.accentText),
+                          const SizedBox(width: 3),
+                        ],
+                        Flexible(
+                          child: Text(
+                              '${_Look.pricesOf(context).of(remaining!)} left today',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: look.style(13,
+                                  weight: FontWeight.w600,
+                                  color: look.accentText)),
+                        ),
+                      ]),
+                    ),
+                  ),
+              ],
             ),
+          ),
         ],
       ),
     );
@@ -1458,8 +1607,34 @@ class _ModelRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final look = _Look.of(context);
+    final titleStyle = look.style(15, weight: FontWeight.w700);
+    final detailStyle = look.style(12.5, color: look.muted);
+    final priceStyle = look.style(12.5, weight: FontWeight.w700);
+    // Sized to what's in them: an app's own price words, its font and the
+    // phone's text size all vary. Cards widen to keep a price on one line, up
+    // to a point; past that it takes two lines and the row grows.
+    const inset = 2 * (12 + 1.6);
+    final screen = MediaQuery.sizeOf(context).width;
+    final widest = items.fold<double>(
+        0, (w, it) => max(w, _measure(context, it.price, priceStyle).width));
+    final double width =
+        (widest + inset).clamp(158.0, max(158.0, screen * 0.7)).toDouble();
+    double priceHeight = 0;
+    for (final it in items) {
+      if (it.price.isEmpty) continue;
+      priceHeight = max(
+          priceHeight,
+          _measure(context, it.price, priceStyle,
+                  maxWidth: width - inset, maxLines: 2)
+              .height);
+    }
+    final height = inset +
+        _measure(context, 'Hg', titleStyle).height +
+        2 +
+        _measure(context, 'Hg', detailStyle).height +
+        (priceHeight > 0 ? 8 + priceHeight : 0);
     return SizedBox(
-      height: 92,
+      height: max(92, height.ceilToDouble() + 1),
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         clipBehavior: Clip.none,
@@ -1472,7 +1647,7 @@ class _ModelRow extends StatelessWidget {
             onTap: () => onSelected(it.id),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
-              width: 158,
+              width: width,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: on
@@ -1489,7 +1664,8 @@ class _ModelRow extends StatelessWidget {
                   Row(children: [
                     Expanded(
                         child: Text(it.title,
-                            style: look.style(15, weight: FontWeight.w700),
+                            style: titleStyle,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis)),
                     AnimatedOpacity(
                       opacity: on ? 1 : 0,
@@ -1500,15 +1676,16 @@ class _ModelRow extends StatelessWidget {
                   ]),
                   const SizedBox(height: 2),
                   Text(it.detail,
-                      style: look.style(12.5, color: look.muted),
+                      style: detailStyle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis),
                   const Spacer(),
                   if (it.price.isNotEmpty)
                     Text(it.price,
-                        style: look.style(12.5,
-                            weight: FontWeight.w700,
-                            color: on ? look.accent : look.text)),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: priceStyle.copyWith(
+                            color: on ? look.accentText : look.text)),
                 ],
               ),
             ),
@@ -1728,6 +1905,12 @@ class _MakeButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final look = _Look.of(context);
     final enabled = onPressed != null;
+    final prices = _Look.pricesOf(context);
+    final figure = price == null ? null : prices.of(price!);
+    final labelStyle =
+        look.style(16.5, weight: FontWeight.w700, color: look.onAccent);
+    final figureStyle =
+        look.style(14, weight: FontWeight.w700, color: look.onAccent);
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 160),
       opacity: enabled || busy ? 1 : 0.45,
@@ -1747,45 +1930,72 @@ class _MakeButton extends StatelessWidget {
           child: InkWell(
             borderRadius: BorderRadius.circular(look.buttonRadius),
             onTap: onPressed,
-            child: SizedBox(
-              height: 56,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 56),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: Row(
-                  children: [
-                    busy
-                        ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2.4, color: look.onAccent))
-                        : Icon(icon, color: look.onAccent, size: 22),
-                    const SizedBox(width: 10),
-                    Expanded(
-                        child: Text(label,
-                            style: look.style(16.5,
-                                weight: FontWeight.w700,
-                                color: look.onAccent))),
-                    if (price != null &&
-                        _Look.pricesOf(context).of(price!) != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                            color: look.onAccent.withValues(alpha: 0.18),
-                            borderRadius: BorderRadius.circular(999)),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          if (!_Look.pricesOf(context).custom)
-                            Icon(Icons.bolt_rounded,
-                                size: 15, color: look.onAccent),
-                          Text(_Look.pricesOf(context).of(price!)!,
-                              style: look.style(14,
-                                  weight: FontWeight.w700,
-                                  color: look.onAccent)),
-                        ]),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+                child: LayoutBuilder(builder: (context, box) {
+                  // The price sits in a chip beside the words when both fit,
+                  // and under them when an app's own price words are long.
+                  const iconAndGap = 22 + 10;
+                  final chip = figure == null
+                      ? 0.0
+                      : 20 +
+                          (prices.custom ? 0 : 15) +
+                          _measure(context, figure, figureStyle).width;
+                  final beside = figure == null ||
+                      iconAndGap +
+                              _measure(context, label, labelStyle).width +
+                              8 +
+                              chip <=
+                          box.maxWidth;
+                  return Row(
+                    children: [
+                      busy
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2.4, color: look.onAccent))
+                          : Icon(icon, color: look.onAccent, size: 22),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: labelStyle),
+                            if (!beside)
+                              Text(figure,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: figureStyle.copyWith(fontSize: 12.5)),
+                          ],
+                        ),
                       ),
-                  ],
-                ),
+                      if (beside && figure != null) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                              color: look.onAccent.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(999)),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            if (!prices.custom)
+                              Icon(Icons.bolt_rounded,
+                                  size: 15, color: look.onAccent),
+                            Text(figure, style: figureStyle),
+                          ]),
+                        ),
+                      ],
+                    ],
+                  );
+                }),
               ),
             ),
           ),
@@ -2131,14 +2341,20 @@ class _PreviewState extends State<_Preview> {
                                 onTap: () => Navigator.of(context).pop(),
                                 tooltip: 'Close',
                                 onDark: true),
-                            const Spacer(),
-                            if (a.credits > 0 && widget.prices.show)
-                              Text(
-                                  widget.prices
-                                      .withUnit(a.credits, unit: 'credits'),
-                                  style: look.style(13,
-                                      weight: FontWeight.w600,
-                                      color: Colors.white70)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: a.credits > 0 && widget.prices.show
+                                  ? Text(
+                                      widget.prices
+                                          .withUnit(a.credits, unit: 'credits'),
+                                      textAlign: TextAlign.right,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: look.style(13,
+                                          weight: FontWeight.w600,
+                                          color: Colors.white70))
+                                  : const SizedBox.shrink(),
+                            ),
                             const SizedBox(width: 8),
                           ]),
                         ),
@@ -2333,16 +2549,25 @@ class _RowButton extends StatelessWidget {
   }
 }
 
-/// The ready-made presenters, as portrait cards in a row.
+/// The presenters, as portrait cards in a row: a card to add their own, their
+/// own, then the ready-made ones.
 class _AvatarRow extends StatelessWidget {
   const _AvatarRow(
       {required this.avatars,
       required this.selected,
-      required this.onSelected});
+      required this.onSelected,
+      this.adding = false,
+      this.onAdd,
+      this.mine = const {},
+      this.onRemove});
 
   final List<StudioAvatar> avatars;
   final String? selected;
   final ValueChanged<String> onSelected;
+  final bool adding;
+  final VoidCallback? onAdd;
+  final Set<String> mine;
+  final ValueChanged<String>? onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -2352,10 +2577,55 @@ class _AvatarRow extends StatelessWidget {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         clipBehavior: Clip.none,
-        itemCount: avatars.length,
+        itemCount: avatars.length + (onAdd == null ? 0 : 1),
         separatorBuilder: (_, __) => const SizedBox(width: 10),
-        itemBuilder: (_, i) {
-          final av = avatars[i];
+        itemBuilder: (_, index) {
+          if (onAdd != null && index == 0) {
+            return Semantics(
+              button: true,
+              label: 'Add your own presenter',
+              child: GestureDetector(
+                onTap: adding ? null : onAdd,
+                child: SizedBox(
+                  width: 104,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        height: 130,
+                        width: 104,
+                        decoration: BoxDecoration(
+                          color: look.card,
+                          borderRadius: BorderRadius.circular(look.radius),
+                          border: Border.all(color: look.line),
+                        ),
+                        child: Center(
+                          child: adding
+                              ? SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2.4, color: look.accent))
+                              : Icon(Icons.add_a_photo_rounded,
+                                  color: look.accent, size: 28),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text('Add yours',
+                          style: look.style(14, weight: FontWeight.w700),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                      Text('Your own photo',
+                          style: look.style(12, color: look.muted),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+          final av = avatars[onAdd == null ? index : index - 1];
           final on = av.id == selected;
           return Semantics(
             selected: on,
@@ -2383,6 +2653,23 @@ class _AvatarRow extends StatelessWidget {
                         child: Stack(fit: StackFit.expand, children: [
                           ColoredBox(color: look.field),
                           _NetImage(av.imageUrl),
+                          if (mine.contains(av.id) && onRemove != null)
+                            Positioned(
+                              left: 2,
+                              top: 2,
+                              child: IconButton(
+                                tooltip: 'Remove ${av.name}',
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () => onRemove!(av.id),
+                                style: IconButton.styleFrom(
+                                    backgroundColor: Colors.black54,
+                                    foregroundColor: Colors.white,
+                                    minimumSize: const Size(28, 28),
+                                    padding: EdgeInsets.zero),
+                                iconSize: 16,
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                            ),
                           if (on)
                             Positioned(
                               right: 6,
@@ -2413,6 +2700,107 @@ class _AvatarRow extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// Their photo, what to call the presenter, the voice, and their word that
+/// they may use this likeness. Nothing is sent until they save.
+class _NewPresenter extends StatefulWidget {
+  const _NewPresenter({required this.photo, required this.voices});
+
+  final Uint8List photo;
+  final List<StudioVoice> voices;
+
+  @override
+  State<_NewPresenter> createState() => _NewPresenterState();
+}
+
+class _NewPresenterState extends State<_NewPresenter> {
+  final name = TextEditingController();
+  late String voice = widget.voices.first.id;
+  bool consent = false;
+
+  @override
+  void dispose() {
+    name.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final look = _Look.of(context);
+    return Padding(
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Your presenter',
+                  style: look.style(20, weight: FontWeight.w700)),
+              const SizedBox(height: 14),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(look.radius),
+                  child: Image.memory(widget.photo,
+                      width: 84, height: 104, fit: BoxFit.cover),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: TextField(
+                    controller: name,
+                    maxLength: 40,
+                    textCapitalization: TextCapitalization.words,
+                    style: look.style(16),
+                    decoration: InputDecoration(
+                      labelText: 'Name',
+                      hintText: 'My presenter',
+                      filled: true,
+                      fillColor: look.field,
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(look.radius),
+                          borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+              ]),
+              const _Label('Voice'),
+              _Pills<String>(
+                values: [for (final v in widget.voices) v.id],
+                selected: voice,
+                onSelected: (v) => setState(() => voice = v),
+              ),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                value: consent,
+                onChanged: (v) => setState(() => consent = v ?? false),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: look.accent,
+                checkColor: look.onAccent,
+                title: Text(
+                    'This is me, or the person pictured has given me permission to use their likeness.',
+                    style: look.style(14, height: 1.35)),
+              ),
+              const SizedBox(height: 8),
+              _MakeButton(
+                label: 'Save presenter',
+                price: null,
+                busy: false,
+                icon: Icons.check_rounded,
+                onPressed: consent
+                    ? () => Navigator.of(context)
+                        .pop((name: name.text.trim(), voice: voice))
+                    : null,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2592,7 +2980,7 @@ class _AudioRowState extends State<_AudioRow> {
               onPressed: () => widget.onUse!(a),
               child: Text('Use',
                   style: look.style(15,
-                      weight: FontWeight.w700, color: look.accent)),
+                      weight: FontWeight.w700, color: look.accentText)),
             ),
         ],
       ),

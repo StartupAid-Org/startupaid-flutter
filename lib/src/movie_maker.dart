@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -135,7 +137,16 @@ class _MovieMakerViewState extends State<MovieMakerView> {
   @override
   Widget build(BuildContext context) {
     return Stack(children: [
-      WebViewWidget(controller: web),
+      // The editor scrolls itself, so its touches are its own at once. Without
+      // this, anything in the host app listening for drags (a keyboard
+      // dismisser around the whole app, a sheet) takes every swipe, and the
+      // page never moves.
+      WebViewWidget(
+        controller: web,
+        gestureRecognizers: {
+          Factory<OneSequenceGestureRecognizer>(EagerGestureRecognizer.new),
+        },
+      ),
       if (loading)
         Center(
             child: CircularProgressIndicator(

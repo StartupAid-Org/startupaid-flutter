@@ -230,6 +230,22 @@ class StudioLook {
     };
   }
 
+  /// The accent for words on a card or the background. A pale brand colour
+  /// (yellow, say) can't be read there, so it moves toward the text colour
+  /// until it can.
+  Color get accentText {
+    double against(Color a, Color b) {
+      final x = a.computeLuminance(), y = b.computeLuminance();
+      return (x > y ? x + 0.05 : y + 0.05) / (x > y ? y + 0.05 : x + 0.05);
+    }
+
+    for (var t = 0.0; t < 1; t += 0.1) {
+      final c = Color.lerp(accent, text, t)!;
+      if (against(c, card) >= 4.5 && against(c, background) >= 4.5) return c;
+    }
+    return text;
+  }
+
   double get buttonRadius => pill ? 999 : radius;
   double get chipRadius => pill ? 999 : (radius * 0.75).clamp(4, 14);
   BorderRadius get corners => BorderRadius.circular(radius);

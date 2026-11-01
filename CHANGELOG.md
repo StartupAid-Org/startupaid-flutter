@@ -1,3 +1,15 @@
+## 0.1.2
+
+- Presenter: users can add their own presenter from a photo (a name, a stock
+  voice, and their word that they may use the likeness), and remove it. Needs
+  the StartupAid API from this release; older servers just don't offer it.
+- Long price words from `priceLabel` no longer overflow: model cards grow to
+  fit, the make button puts the price under its label, and the balance moves
+  under the title instead of cutting it off.
+- Words in the accent colour stay readable on pale brand colours.
+- Film Maker scrolls in apps that listen for drags around the whole app, such as
+  a keyboard dismisser. Its web view now takes its own touches.
+
 ## 0.1.1
 
 - Docs: signatures now expire (`v2.<expiry>.<hex>`), and new widget keys

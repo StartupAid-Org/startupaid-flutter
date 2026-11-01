@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -16,6 +18,9 @@ class FakeStudio {
   final signatures = <String>[];
   final images = <Map<String, dynamic>>[];
   Map<String, dynamic>? display;
+  List<Map<String, dynamic>> extraImageModels = [];
+  Map<String, dynamic>? talking;
+  final calls = <String>[];
 
   late final client = MockClient((req) async {
     final path = req.url.path;
@@ -37,11 +42,36 @@ class FakeStudio {
           jsonEncode({'error': 'Your studio session has ended.'}), 401);
     }
     switch (path) {
+      case '/widget/v1/uploads':
+        calls.add('upload');
+        return http.Response(
+            jsonEncode({
+              'asset': {
+                'id': 'up1',
+                'kind': 'upload',
+                'status': 'ready',
+                'url': 'https://cdn.test/me.png'
+              }
+            }),
+            200);
+      case '/widget/v1/talking/presenters':
+        calls.add('presenter:${req.body}');
+        return http.Response(
+            jsonEncode({
+              'presenter': {
+                'id': 'own-9',
+                'name': 'Ada',
+                'role': 'Yours',
+                'imageUrl': ''
+              }
+            }),
+            201);
       case '/widget/v1/config':
         return http.Response(
             jsonEncode({
-              'features': ['images'],
+              'features': ['images', if (talking != null) 'talking'],
               if (display != null) 'display': display,
+              if (talking != null) 'talking': talking,
               'budget': {
                 'dailyCredits': 150,
                 'usedToday': images.length * 30,
@@ -57,7 +87,8 @@ class FakeStudio {
                     'mode': 'text',
                     'sizable': true,
                     'maxImages': 4
-                  }
+                  },
+                  ...extraImageModels,
                 ],
                 'sizes': ['1:1', '3:4'],
                 'maxCount': 4,
@@ -230,6 +261,152 @@ void main() {
     expect(find.textContaining("close to today's limit"), findsOneWidget);
     expect(told?.remaining, 30);
   });
+
+  testWidgets("long price words fit on a small phone, at a large text size",
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final fake = FakeStudio()
+      ..extraImageModels = [
+        {
+          'id': 'fine',
+          'label': 'High quality',
+          'note': 'Best quality',
+          'credits': 90,
+          'mode': 'text',
+          'sizable': true,
+          'maxImages': 4
+        }
+      ];
+    tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpWidget(MaterialApp(
+        home: StartupAidStudio(
+            client: fake.studio(),
+            title: 'Make with AI',
+            priceLabel: (c) => '${c * 53} tokens (≈ ₦${c * 133})')));
+    await tester.pumpAndSettle();
+    // An overflow fails the test by itself; the title and price are whole.
+    expect(tester.takeException(), isNull);
+    expect(find.text('Make with AI'), findsOneWidget);
+    final title = tester.getSize(find.text('Make with AI'));
+    expect(title.width, greaterThan(100));
+  });
+
+  testWidgets('their own presenters come first, after a card to add one',
+      (tester) async {
+    tester.view.physicalSize = const Size(1000, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final fake = FakeStudio()
+      ..talking = {
+        'enabled': true,
+        'maxChars': 3000,
+        'aspectRatios': ['9:16'],
+        'categories': [],
+        'avatars': [
+          {'id': 'amara', 'name': 'Amara', 'role': 'Host', 'imageUrl': ''}
+        ],
+        'mine': [
+          {'id': 'own-1', 'name': 'Ada', 'role': 'Yours', 'imageUrl': ''}
+        ],
+        'voices': [
+          {'id': 'Rachel', 'note': 'Calm'}
+        ],
+      };
+    await tester.pumpWidget(MaterialApp(
+        home: StartupAidStudio(client: fake.studio(), features: const [
+      StudioFeature.talking
+    ])));
+    await tester.pumpAndSettle();
+    expect(find.text('Add yours'), findsOneWidget);
+    expect(find.byTooltip('Remove Ada'), findsOneWidget);
+    expect(find.byTooltip('Remove Amara'), findsNothing);
+    expect(tester.getTopLeft(find.text('Ada')).dx,
+        lessThan(tester.getTopLeft(find.text('Amara')).dx));
+    expect(tester.getTopLeft(find.text('Add yours')).dx,
+        lessThan(tester.getTopLeft(find.text('Ada')).dx));
+  });
+
+  testWidgets('their own presenter needs their word before the photo is sent',
+      (tester) async {
+    tester.view.physicalSize = const Size(1000, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const channel = MethodChannel('plugins.flutter.io/image_picker');
+    final dir = Directory.systemTemp.createTempSync('presenter');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final file = File('${dir.path}/me.png')
+      ..writeAsBytesSync(base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='));
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel, (call) async => file.path);
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null));
+    final fake = FakeStudio()
+      ..talking = {
+        'enabled': true,
+        'maxChars': 3000,
+        'aspectRatios': ['9:16'],
+        'categories': [],
+        'avatars': [
+          {'id': 'amara', 'name': 'Amara', 'role': 'Host', 'imageUrl': ''}
+        ],
+        'voices': [
+          {'id': 'Rachel', 'note': 'Calm'},
+          {'id': 'Brian', 'note': 'Deep'}
+        ],
+      };
+    await tester.pumpWidget(MaterialApp(
+        home: StartupAidStudio(
+            client: fake.studio(), features: const [StudioFeature.talking])));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Add yours'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pumpAndSettle();
+
+    // Saving does nothing until they tick the box.
+    await tester.tap(find.text('Save presenter'));
+    await tester.pump();
+    expect(find.text('Save presenter'), findsOneWidget);
+    expect(fake.calls, isEmpty);
+
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pump();
+    await tester.tap(find.text('Brian'));
+    await tester.pump();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Save presenter'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pumpAndSettle();
+    expect(fake.calls.first, 'upload');
+    final sent = jsonDecode(fake.calls[1].substring('presenter:'.length));
+    expect(sent['uploadId'], 'up1');
+    expect(sent['voice'], 'Brian');
+    expect(sent['consent'], isTrue);
+    expect(find.text('Ada'), findsOneWidget);
+    expect(find.byTooltip('Remove Ada'), findsOneWidget);
+  });
+
+  testWidgets('accent words stay readable on a pale card', (tester) async {
+    late StudioLook look;
+    await tester.pumpWidget(MaterialApp(home: Builder(builder: (context) {
+      look = StudioLook.resolve(
+          context,
+          const StudioTheme(
+              mode: StudioThemeMode.light,
+              light: StudioPalette(accent: Color(0xFFFFE600))));
+      return const SizedBox();
+    })));
+    final x = look.accentText.computeLuminance();
+    final y = look.card.computeLuminance();
+    expect((y + 0.05) / (x + 0.05), greaterThanOrEqualTo(4.5));
+  });
+
 
   testWidgets("an app's own price label shows even with credits hidden",
       (tester) async {

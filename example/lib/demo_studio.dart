@@ -146,6 +146,18 @@ class DemoStudio {
           202,
           headers: _json,
         );
+      case ('POST', '/talking/presenters'):
+        final made = {
+          'id': 'own-${++_n}',
+          'name': (body['name'] as String?)?.isNotEmpty == true
+              ? body['name']
+              : 'My presenter',
+          'role': 'Yours',
+          'imageUrl': 'https://randomuser.me/api/portraits/women/68.jpg',
+        };
+        return http.Response(jsonEncode({'presenter': made}), 201);
+      case ('DELETE', _) when path.startsWith('/talking/presenters/'):
+        return http.Response(jsonEncode({'ok': true}), 200);
       case ('POST', '/uploads'):
         final up = _asset(
           'upload',
@@ -300,6 +312,12 @@ class DemoStudio {
       'maxChars': 3000,
       'aspectRatios': ['9:16', '16:9'],
       'categories': ['Office and business', 'Studio and creators'],
+      'voices': [
+        {'id': 'Rachel', 'note': 'Calm, clear narrator'},
+        {'id': 'Aria', 'note': 'Expressive and warm'},
+        {'id': 'Brian', 'note': 'Deep, steady narrator'},
+        {'id': 'Liam', 'note': 'Friendly and energetic'},
+      ],
       'avatars': [
         for (final (i, a) in [
           ('amara', 'Amara', 'Founder', 'women/44', 'Office and business'),

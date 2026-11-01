@@ -349,6 +349,8 @@ class StudioAvatar {
 class StudioTalkingOptions {
   const StudioTalkingOptions(
       {required this.avatars,
+      this.mine = const [],
+      this.voices = const [],
       required this.categories,
       required this.maxChars,
       required this.aspectRatios});
@@ -360,6 +362,14 @@ class StudioTalkingOptions {
                 for (final a in (j['avatars'] as List? ?? const []))
                   StudioAvatar.fromJson(a as Map<String, dynamic>)
               ],
+        mine: [
+          for (final a in (j['mine'] as List? ?? const []))
+            StudioAvatar.fromJson(a as Map<String, dynamic>)
+        ],
+        voices: [
+          for (final v in (j['voices'] as List? ?? const []))
+            StudioVoice.fromJson(v as Map<String, dynamic>)
+        ],
         categories: [
           for (final c in (j['categories'] as List? ?? const [])) _str(c)
         ],
@@ -371,6 +381,12 @@ class StudioTalkingOptions {
         ],
       );
   final List<StudioAvatar> avatars;
+
+  /// The user's own presenters, made from their photos.
+  final List<StudioAvatar> mine;
+
+  /// The voices one of their own can speak in.
+  final List<StudioVoice> voices;
   final List<String> categories;
   final int maxChars;
   final List<String> aspectRatios;
